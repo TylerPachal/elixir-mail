@@ -12,19 +12,36 @@ defmodule Mail.Parsers.RFC2822 do
   @months ~w(Jan Feb Mar Apr May Jun Jul Aug Sep Oct Nov Dec)
 
   @spec parse(binary() | nonempty_maybe_improper_list()) :: Mail.Message.t()
-  def parse(content)
+  def parse(content) do
+    do_parse(content, nil)
+  end
 
-  def parse([_ | _] = lines) do
+  defp do_parse([_ | _] = lines, line_ending_atom) do
     [headers, lines] = extract_headers(lines)
 
-    %Mail.Message{}
+    %Mail.Message{line_ending: line_ending_atom}
     |> parse_headers(headers)
     |> mark_multipart
     |> parse_body(lines)
   end
 
-  def parse(content),
-    do: content |> String.split("\r\n") |> Enum.map(&String.trim_trailing/1) |> parse
+  defp do_parse(content, nil) do
+    split = Regex.split(~r/\r?\n/, content, include_captures: true)
+    line_ending = Enum.at(split, 1) |> Mail.LineEnding.to_atom()
+
+    split
+    |> Enum.take_every(2)
+    |> Enum.map(&String.trim_trailing/1)
+    |> do_parse(line_ending)
+  end
+
+  defp do_parse(content, line_ending_atom)  do
+    line_ending = Mail.LineEnding.to_literal(line_ending_atom)
+
+    String.split(content, line_ending)
+    |> Enum.map(&String.trim_trailing/1)
+    |> do_parse(line_ending)
+  end
 
   defp extract_headers(list, headers \\ [])
 
@@ -377,7 +394,7 @@ defmodule Mail.Parsers.RFC2822 do
   defp remove_excess_whitespace(<<char::utf8, rest::binary>>),
     do: <<char::utf8, remove_excess_whitespace(rest)::binary>>
 
-  defp parse_body(%Mail.Message{multipart: true} = message, lines) do
+  defp parse_body(%Mail.Message{multipart: true, line_ending: line_ending} = message, lines) do
     content_type = message.headers["content-type"]
     boundary = Mail.Proplist.get(content_type, "boundary")
 
@@ -385,25 +402,27 @@ defmodule Mail.Parsers.RFC2822 do
       lines
       |> extract_parts(boundary)
       |> Enum.map(fn part ->
-        parse(part)
+        do_parse(part, line_ending)
       end)
 
     Map.put(message, :parts, parts)
   end
 
-  defp parse_body(%Mail.Message{} = message, lines) do
+  defp parse_body(%Mail.Message{line_ending: line_ending} = message, lines) do
+    joiner = Mail.LineEnding.to_literal(line_ending)
+
     decoded =
       lines
-      |> join_body
+      |> join_body(joiner)
       |> decode(message)
 
     Map.put(message, :body, decoded)
   end
 
-  defp join_body(lines, acc \\ [])
-  defp join_body([], acc), do: acc |> Enum.reverse() |> Enum.join("\r\n")
-  defp join_body([""], acc), do: acc |> Enum.reverse() |> Enum.join("\r\n")
-  defp join_body([head | tail], acc), do: join_body(tail, [head | acc])
+  defp join_body(lines, joiner, acc \\ [])
+  defp join_body([], joiner, acc), do: acc |> Enum.reverse() |> Enum.join(joiner)
+  defp join_body([""], joiner, acc), do: acc |> Enum.reverse() |> Enum.join(joiner)
+  defp join_body([head | tail], joiner, acc), do: join_body(tail, joiner, [head | acc])
 
   defp extract_parts(lines, boundary, acc \\ [], parts \\ nil)
 

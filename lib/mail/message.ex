@@ -2,7 +2,8 @@ defmodule Mail.Message do
   defstruct headers: %{},
             body: nil,
             parts: [],
-            multipart: false
+            multipart: false,
+            line_ending: :CRLF
 
   @doc """
   Add new part
